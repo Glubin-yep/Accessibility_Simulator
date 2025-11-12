@@ -1,6 +1,7 @@
 import os
 import time
 import cv2
+import re
 import numpy as np
 import pytesseract
 import concurrent.futures
@@ -9,6 +10,7 @@ import functools
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
+from collections import defaultdict
 
 
 # ГЛОБАЛЬНІ ТАБЛИЦІ (LUT) ТА МАТРИЦІ  ---
@@ -84,7 +86,7 @@ def take_screenshot(url, filename="screenshot_original.png"):
     options = webdriver.ChromeOptions()
     options.add_argument("--headless")
     options.add_argument("--start-maximized")
-    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--window-size=2560,1440")
     try:
         with webdriver.Chrome(
             service=ChromeService(ChromeDriverManager().install()), options=options
@@ -311,44 +313,90 @@ def simulate_anomalous_trichromacy_machado(image, sim_type, severity=0.5):
 # --- 4. ЕТАП АНАЛІЗУ ---
 
 
-def analyze_readability(image):
+def get_word_data(image):
     """
-    Аналізує, скільки слів може розпізнати Tesseract
+    Аналізує зображення, повертає словник з координатами слів
     """
     try:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.adaptiveThreshold(
-            gray,
-            255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            11,
-            2,
+        custom_config = r"--psm 11"
+        data = pytesseract.image_to_data(
+            image,
+            lang="ukr+eng",
+            config=custom_config,
+            output_type=pytesseract.Output.DICT,
         )
-        custom_config = r"--psm 6"
-        text = pytesseract.image_to_string(thresh, lang="ukr+eng", config=custom_config)
-        word_count = len(text.split())
-        return word_count
+
+        word_map = defaultdict(list)
+        n_boxes = len(data["level"])
+
+        for i in range(n_boxes):
+            # Беремо лише слова з упевненістю > 30%
+            conf = int(data["conf"][i])
+            if conf < 30:
+                continue
+
+            text = data["text"][i]
+            if not text or text.isspace():
+                continue
+
+            # Нормалізація (видаляємо все, крім літер, цифр та апострофів)
+            normalized_word = re.sub(r"[^\w']+", "", text.lower(), re.UNICODE)
+
+            # Враховуємо лише слова довші за 1 символ
+            if len(normalized_word) > 1:
+                (x, y, w, h) = (
+                    data["left"][i],
+                    data["top"][i],
+                    data["width"][i],
+                    data["height"][i],
+                )
+                word_map[normalized_word].append((x, y, w, h))
+
+        return word_map
     except Exception as e:
-        print(f"Помилка Tesseract: {e}")
-        return 0
+        print(f"Помилка Tesseract (image_to_data): {e}")
+        return defaultdict(list)
 
 
 # --- 5. ЕТАП ЗАПУСКУ ТА ЗВІТУВАННЯ ---
 
 
-def process_simulation(simulation_name, simulation_func, original_image):
+def process_simulation(
+    simulation_name, simulation_func, original_image, baseline_word_data
+):
     """
-    Функція обробки.
+    Функція обробки з візуалізацією збігів та помилок.
     """
     print(f"[В роботі]: Симуляція '{simulation_name}'...")
     start_time = time.perf_counter()
 
     simulated_image = simulation_func(original_image)
 
+    sim_word_data = get_word_data(simulated_image)
+
+    sim_word_set = set(sim_word_data.keys())
+    baseline_word_set = set(baseline_word_data.keys())
+
+    common_words_set = baseline_word_set.intersection(sim_word_set)
+    artifact_words_set = sim_word_set.difference(baseline_word_set)
+
+    image_to_save = simulated_image.copy()
+
+    # Зелені - спільні (правильно розпізнані)
+    color_common = (0, 200, 0)
+    for word in common_words_set:
+        for x, y, w, h in sim_word_data[word]:
+            cv2.rectangle(image_to_save, (x, y), (x + w, y + h), color_common, 2)
+
+    # Червоні - артефакти (хибно розпізнані)
+    color_artifact = (0, 0, 255)
+    for word in artifact_words_set:
+        for x, y, w, h in sim_word_data[word]:
+            cv2.rectangle(image_to_save, (x, y), (x + w, y + h), color_artifact, 2)
+
     filename = f"screenshot_{simulation_name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace(':', '')}.png"
     try:
-        is_success, buffer = cv2.imencode(".png", simulated_image)
+        is_success, buffer = cv2.imencode(".png", image_to_save)
         if not is_success:
             raise IOError("Не вдалося закодувати зображення у формат PNG")
         with open(filename, "wb") as f:
@@ -357,18 +405,20 @@ def process_simulation(simulation_name, simulation_func, original_image):
         print(f"ПОМИЛКА: Не вдалося зберегти {filename}. Деталі: {e}")
         filename = None
 
-    word_count = analyze_readability(simulated_image)
     end_time = time.perf_counter()
     duration = end_time - start_time
 
     print(
-        f"[Завершено]: Симуляція '{simulation_name}'. Знайдено слів: {word_count}. Час: {duration:.2f} сек."
+        f"[Завершено]: Симуляція '{simulation_name}'. Знайдено слів: {len(sim_word_set)}. Час: {duration:.2f} сек."
     )
-    return simulation_name, word_count, filename, duration
+
+    return simulation_name, sim_word_set, filename, duration
 
 
 def main(args):
-    URL_TO_ANALYZE = "https://uk.wikipedia.org/wiki/%D0%93%D0%BE%D0%BB%D0%BE%D0%B2%D0%BD%D0%B0_%D1%81%D1%82%D0%BE%D1%80%D1%96%D0%BD%D0%BA%D0%B0"
+    URL_TO_ANALYZE = (
+        "https://en.wikipedia.org/wiki/International_Organization_for_Standardization"
+    )
     ORIGINAL_FILENAME = "screenshot_original.png"
 
     if args.tesseract_cmd:
@@ -421,22 +471,31 @@ def main(args):
         return
 
     print("Аналізую оригінальне зображення (базова лінія)...")
-    baseline_word_count = analyze_readability(original_image)
-    print(f"Базова лінія: {baseline_word_count} слів знайдено.\n")
+    baseline_word_data = get_word_data(original_image)
+    baseline_word_set = set(baseline_word_data.keys())
+    baseline_word_count = len(baseline_word_set)
+    print(f"Базова лінія: {baseline_word_count} унікальних слів знайдено.\n")
 
     report_data = {}
     total_processing_time = 0.0
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [
-            executor.submit(process_simulation, name, func, original_image.copy())
+            executor.submit(
+                process_simulation,
+                name,
+                func,
+                original_image.copy(),
+                baseline_word_data,
+            )
             for name, func in SIMULATIONS.items()
         ]
 
         for future in concurrent.futures.as_completed(futures):
-            name, word_count, filename, duration = future.result()
+
+            name, word_set, filename, duration = future.result()
             report_data[name] = (
-                word_count,
+                word_set,
                 filename,
                 duration,
             )
@@ -447,22 +506,39 @@ def main(args):
     print("=" * 40)
     print(f"Веб-сайт: {URL_TO_ANALYZE}")
     print(f"Оригінальний файл: {ORIGINAL_FILENAME}")
-    print(f"Базова читабельність: {baseline_word_count} слів\n")
-    print(f"Загальний час обробки: {total_processing_time:.2f} сек.\n")  #
+    print(f"Базова читабельність: {baseline_word_count} унікальних слів\n")
+    print(f"Загальний час обробки: {total_processing_time:.2f} сек.\n")
     print("--- Результати Симуляцій ---")
 
-    for name, (words, filename, duration) in sorted(report_data.items()):
+    for name, (sim_word_set, filename, duration) in sorted(report_data.items()):
+
+        sim_word_count = len(sim_word_set)
+
+        common_words = baseline_word_set.intersection(sim_word_set)
+        common_count = len(common_words)
+
+        lost_words = baseline_word_set.difference(sim_word_set)
+        lost_count = len(lost_words)
+
+        artifact_words = sim_word_set.difference(baseline_word_set)
+        artifact_count = len(artifact_words)
+
         if baseline_word_count > 0:
-            drop_percentage = (
-                (baseline_word_count - words) / baseline_word_count
-            ) * 100
+            overlap_percentage = (common_count / baseline_word_count) * 100
+
+            loss_percentage = (lost_count / baseline_word_count) * 100
         else:
-            drop_percentage = 0
+            overlap_percentage = 0
+            loss_percentage = 0
 
         print(f"\nСимуляція: {name}")
         print(f"  Файл результату: {filename if filename else 'ПОМИЛКА ЗБЕРЕЖЕННЯ'}")
-        print(f"  Розпізнано слів: {words}")
-        print(f"  Втрата читабельності: {drop_percentage:.1f}%")
+        print(
+            f"  Всього розпізнано: {sim_word_count} (в оригіналі {baseline_word_count})"
+        )
+        print(f"  Збіг з оригіналом: {common_count} слів ({overlap_percentage:.1f}%)")
+        print(f"  Втрачено з оригіналу: {lost_count} слів ({loss_percentage:.1f}%)")
+        print(f"  Нові артефакти (помилки OCR): {artifact_count} слів")
         print(f"  Час обробки: {duration:.2f} сек.")
 
 
