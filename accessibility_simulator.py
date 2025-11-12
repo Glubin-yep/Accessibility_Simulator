@@ -11,6 +11,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service as ChromeService
 from webdriver_manager.chrome import ChromeDriverManager
 from collections import defaultdict
+from PIL import Image, ImageDraw, ImageFont
 
 
 # ГЛОБАЛЬНІ ТАБЛИЦІ (LUT) ТА МАТРИЦІ  ---
@@ -56,8 +57,6 @@ SIM_MATRICES = {
 
 
 # --- 1. ДОПОМІЖНІ ФУНКЦІЇ ---
-
-
 def gamma_decode(img_srgb):
     """
     Декодує 8-бітне sRGB зображення у лінійний RGB
@@ -75,6 +74,106 @@ def gamma_encode(img_linear):
     img_srgb[mask] = img_linear[mask] * 12.92
     img_srgb[~mask] = 1.055 * np.power(img_linear[~mask], 1.0 / 2.4) - 0.055
     return (img_srgb * 255.0).astype(np.uint8)
+
+
+def _get_font(font_size=16):
+    """
+    Допоміжна функція для пошуку та завантаження .ttf шрифту, що підтримує кирилицю.
+    """
+    font_paths = [
+        "C:/Windows/Fonts/Arial.ttf",
+    ]
+
+    font_path = None
+    for path in font_paths:
+        if os.path.exists(path):
+            font_path = path
+            break
+
+    try:
+        if font_path:
+            return ImageFont.truetype(font_path, font_size)
+        else:
+            print(
+                "ПОПЕРЕДЖЕННЯ: Не знайдено шрифтів Arial або DejaVuSans. Спроба завантажити шрифт за замовчуванням."
+            )
+            return ImageFont.load_default()
+    except IOError as e:
+        print(f"ПОМИЛКА: Не вдалося завантажити шрифт {font_path}. {e}")
+        return ImageFont.load_default()
+
+
+def generate_readability_report_table(
+    report_data, baseline_word_set, filename="screenshot_report_readability.png"
+):
+    """
+    Генерує зображення-таблицю зі статистикою читабельності (використовує Pillow).
+    """
+    print(f"Генерую таблицю звіту читабельності: {filename}...")
+
+    font = _get_font(font_size=15)
+    header_font = _get_font(font_size=15)
+    row_height = 30
+    col_widths = [240, 100, 100, 100, 100]
+    img_width = sum(col_widths) + 20
+
+    baseline_count = len(baseline_word_set)
+
+    table_data = []
+    table_data.append(
+        ("[Симуляція]", "[Всього]", "[Збіг %]", "[Втрати %]", "[Артефакти]")
+    )
+    table_data.append(("Оригінал (База)", f"{baseline_count}", "100.0%", "0.0%", "0"))
+
+    for name, (sim_word_set, _, _) in sorted(report_data.items()):
+        sim_count = len(sim_word_set)
+        common_count = len(baseline_word_set.intersection(sim_word_set))
+        lost_count = len(baseline_word_set.difference(sim_word_set))
+        artifact_count = len(sim_word_set.difference(baseline_word_set))
+
+        overlap_perc = (
+            (common_count / baseline_count * 100) if baseline_count > 0 else 0
+        )
+        loss_perc = (lost_count / baseline_count * 100) if baseline_count > 0 else 0
+
+        table_data.append(
+            (
+                name,
+                f"{sim_count}",
+                f"{overlap_perc:.1f}%",
+                f"{loss_perc:.1f}%",
+                f"{artifact_count}",
+            )
+        )
+
+    img_height = row_height * len(table_data) + 20
+    image = Image.new("RGB", (img_width, img_height), "white")
+    draw = ImageDraw.Draw(image)
+
+    y_offset = 10
+    for row_index, row in enumerate(table_data):
+        x_offset = 10
+        current_font = header_font if row_index == 0 else font
+
+        for i, cell in enumerate(row):
+            draw.text((x_offset, y_offset), str(cell), fill="black", font=current_font)
+            x_offset += col_widths[i]
+
+        y_offset += row_height
+        draw.line(
+            [
+                (5, y_offset - int(row_height / 2) + 2),
+                (img_width - 5, y_offset - int(row_height / 2) + 2),
+            ],
+            fill=(200, 200, 200),
+            width=1,
+        )
+
+    try:
+        image.save(filename)
+        print(f"[Успішно] Таблицю читабельності збережено як {filename}")
+    except Exception as e:
+        print(f"[ПОМИЛКА] Не вдалося зберегти таблицю звіту: {e}")
 
 
 # --- 2. ЕТАП ЗБОРУ ДАНИХ ---
@@ -416,7 +515,7 @@ def process_simulation(
 
 
 def main(args):
-    URL_TO_ANALYZE = "https://en.wikipedia.org/wiki/Main_Page"
+    URL_TO_ANALYZE = "https://uk.wikipedia.org/wiki/%D0%93%D0%BE%D0%BB%D0%BE%D0%B2%D0%BD%D0%B0_%D1%81%D1%82%D0%BE%D1%80%D1%96%D0%BD%D0%BA%D0%B0"
     ORIGINAL_FILENAME = "screenshot_original.png"
 
     if args.tesseract_cmd:
@@ -470,6 +569,7 @@ def main(args):
 
     print("Аналізую оригінальне зображення (базова лінія)...")
     baseline_word_data = get_word_data(original_image)
+
     baseline_word_set = set(baseline_word_data.keys())
     baseline_word_count = len(baseline_word_set)
     print(f"Базова лінія: {baseline_word_count} унікальних слів знайдено.\n")
@@ -490,7 +590,6 @@ def main(args):
         ]
 
         for future in concurrent.futures.as_completed(futures):
-
             name, word_set, filename, duration = future.result()
             report_data[name] = (
                 word_set,
@@ -499,25 +598,44 @@ def main(args):
             )
             total_processing_time += duration
 
+    # --- НОВИЙ БЛОК: ГЕНЕРАЦІЯ ТАБЛИЦЬ-ЗВІТІВ ---
     print("\n" + "=" * 40)
-    print(" ЗВІТ ПРО АНАЛІЗ ДОСТУПНОСТІ")
+    print(" ГЕНЕРАЦІЯ ЗОБРАЖЕНЬ-ЗВІТІВ")
+    print("=" * 40)
+    if report_data:
+        generate_readability_report_table(
+            report_data, baseline_word_set, filename="screenshot_report_readability.png"
+        )
+
+    else:
+        print("Немає даних для генерації звітів.")
+    # --- КІНЕЦЬ НОВОГО БЛОКУ ---
+
+    print("\n" + "=" * 40)
+    print(" ЗВІТ ПРО АНАЛІЗ ДОСТУПНОСТІ (КОНСОЛЬ)")
     print("=" * 40)
     print(f"Веб-сайт: {URL_TO_ANALYZE}")
     print(f"Оригінальний файл: {ORIGINAL_FILENAME}")
     print(f"Базова читабельність: {baseline_word_count} унікальних слів\n")
     print(f"Загальний час обробки: {total_processing_time:.2f} сек.\n")
-    print("--- Результати Симуляцій ---")
+    print(
+        f"Згенеровано таблиці: 'screenshot_report_readability.png' та 'screenshot_report_performance.png'\n"
+    )
+    print("--- Результати Симуляцій (Детально) ---")
 
     for name, (sim_word_set, filename, duration) in sorted(report_data.items()):
 
         sim_word_count = len(sim_word_set)
 
+        # 1. Знаходимо спільні слова (збіг)
         common_words = baseline_word_set.intersection(sim_word_set)
         common_count = len(common_words)
 
+        # 2. Знаходимо втрачені слова (були в оригіналі, зникли в симуляції)
         lost_words = baseline_word_set.difference(sim_word_set)
         lost_count = len(lost_words)
 
+        # 3. Знаходимо нові артефакти (з'явилися в симуляції, не було в оригіналі)
         artifact_words = sim_word_set.difference(baseline_word_set)
         artifact_count = len(artifact_words)
 
@@ -531,6 +649,9 @@ def main(args):
 
         print(f"\nСимуляція: {name}")
         print(f"  Файл результату: {filename if filename else 'ПОМИЛКА ЗБЕРЕЖЕННЯ'}")
+        print(
+            f"  Візуалізація: Зелені рамки = збіг, Червоні рамки = хибно розпізнані (артефакти)"
+        )
         print(
             f"  Всього розпізнано: {sim_word_count} (в оригіналі {baseline_word_count})"
         )
