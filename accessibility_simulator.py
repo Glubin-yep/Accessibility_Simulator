@@ -1,4 +1,5 @@
 import os
+import time
 import cv2
 import numpy as np
 import pytesseract
@@ -304,7 +305,6 @@ def simulate_anomalous_trichromacy_machado(image, sim_type, severity=0.5):
         f"ПОПЕРЕДЖЕННЯ: {sim_type} (Machado, severity={severity}) не реалізовано. "
         "Повертаю оригінальне зображення."
     )
-    # raise NotImplementedError("Модель Мачадо (2009) не реалізована.")
     return image
 
 
@@ -342,6 +342,7 @@ def process_simulation(simulation_name, simulation_func, original_image):
     Функція обробки.
     """
     print(f"[В роботі]: Симуляція '{simulation_name}'...")
+    start_time = time.perf_counter()
 
     simulated_image = simulation_func(original_image)
 
@@ -357,8 +358,13 @@ def process_simulation(simulation_name, simulation_func, original_image):
         filename = None
 
     word_count = analyze_readability(simulated_image)
-    print(f"[Завершено]: Симуляція '{simulation_name}'. Знайдено слів: {word_count}")
-    return simulation_name, word_count, filename
+    end_time = time.perf_counter()
+    duration = end_time - start_time
+
+    print(
+        f"[Завершено]: Симуляція '{simulation_name}'. Знайдено слів: {word_count}. Час: {duration:.2f} сек."
+    )
+    return simulation_name, word_count, filename, duration
 
 
 def main(args):
@@ -399,7 +405,7 @@ def main(args):
             simulate_floaters, num_floaters=30, max_size=50
         ),
         "Втрата контрасту (CSF)": functools.partial(
-            simulate_csf_loss, cutoff_frequency_ratio=0.08
+            simulate_csf_loss, cutoff_frequency_ratio=0.20
         ),
         "Протаномалія (Machado)": functools.partial(
             simulate_anomalous_trichromacy_machado, sim_type="protanomaly", severity=0.6
@@ -419,6 +425,7 @@ def main(args):
     print(f"Базова лінія: {baseline_word_count} слів знайдено.\n")
 
     report_data = {}
+    total_processing_time = 0.0
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = [
@@ -427,18 +434,24 @@ def main(args):
         ]
 
         for future in concurrent.futures.as_completed(futures):
-            name, word_count, filename = future.result()
-            report_data[name] = (word_count, filename)
+            name, word_count, filename, duration = future.result()
+            report_data[name] = (
+                word_count,
+                filename,
+                duration,
+            )
+            total_processing_time += duration
 
     print("\n" + "=" * 40)
-    print(" ЗВІТ ПРО АНАЛІЗ ДОСТУПНОСТІ (v3 - Розширений) ")
+    print(" ЗВІТ ПРО АНАЛІЗ ДОСТУПНОСТІ")
     print("=" * 40)
     print(f"Веб-сайт: {URL_TO_ANALYZE}")
     print(f"Оригінальний файл: {ORIGINAL_FILENAME}")
     print(f"Базова читабельність: {baseline_word_count} слів\n")
+    print(f"Загальний час обробки: {total_processing_time:.2f} сек.\n")  #
     print("--- Результати Симуляцій ---")
 
-    for name, (words, filename) in sorted(report_data.items()):
+    for name, (words, filename, duration) in sorted(report_data.items()):
         if baseline_word_count > 0:
             drop_percentage = (
                 (baseline_word_count - words) / baseline_word_count
@@ -450,6 +463,7 @@ def main(args):
         print(f"  Файл результату: {filename if filename else 'ПОМИЛКА ЗБЕРЕЖЕННЯ'}")
         print(f"  Розпізнано слів: {words}")
         print(f"  Втрата читабельності: {drop_percentage:.1f}%")
+        print(f"  Час обробки: {duration:.2f} сек.")
 
 
 if __name__ == "__main__":
