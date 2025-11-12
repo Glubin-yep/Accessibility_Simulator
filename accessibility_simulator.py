@@ -416,9 +416,7 @@ def process_simulation(
 
 
 def main(args):
-    URL_TO_ANALYZE = (
-        "https://en.wikipedia.org/wiki/International_Organization_for_Standardization"
-    )
+    URL_TO_ANALYZE = "https://en.wikipedia.org/wiki/Main_Page"
     ORIGINAL_FILENAME = "screenshot_original.png"
 
     if args.tesseract_cmd:
