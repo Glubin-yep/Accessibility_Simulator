@@ -35,7 +35,7 @@
 
 1.  Клонуйте репозиторій:
     ```bash
-    git clone https://your-repo-url/accessibility-simulator.git
+    git clone https://github.com/Glubin-yep/Accessibility_Simulator.git
     cd accessibility-simulator
     ```
 
