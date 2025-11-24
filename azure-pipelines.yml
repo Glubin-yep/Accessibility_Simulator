@@ -6,8 +6,12 @@
 trigger:
 - main
 
+
 pool:
-  vmImage: ubuntu-latest
+ name: default #agent pool
+ demands:
+ - agent.name -equals DESKTOP-7ELQFO1 #self-hosted agent
+
 
 strategy:
   matrix:
