@@ -1,6 +1,5 @@
-opencv-python
-numpy
-pytesseract
-selenium
-webdriver-manager
-Pillow
+numpy>=1.24
+opencv-python>=4.8
+pytesseract>=0.3.10
+selenium>=4.11
+Pillow>=10.0

@@ -1,159 +1,178 @@
 import os
+import re
 import time
+from dataclasses import dataclass
+
 import cv2
 from PIL import Image, ImageDraw, ImageFont
-from analysis import get_word_data
+
+from analysis import compute_metrics, get_word_data
+
+# Кольори рамок (BGR)
+COLOR_COMMON = (0, 200, 0)  # зелений  — слово збереглося
+COLOR_LOST = (0, 165, 255)  # помаранчевий — слово втрачено (позиція з оригіналу)
+COLOR_ARTIFACT = (0, 0, 255)  # червоний — хибно розпізнане слово (артефакт)
+
+_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/arial.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/Library/Fonts/Arial.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+]
+
+
+@dataclass
+class SimulationResult:
+    name: str
+    word_set: set
+    filename: str
+    simulation_time: float  # лише сама симуляція
+    ocr_time: float  # розпізнавання тексту на симульованому зображенні
+
+    @property
+    def total_time(self):
+        return self.simulation_time + self.ocr_time
 
 
 def _get_font(font_size=16):
-    """
-    Допоміжна функція для пошуку та завантаження .ttf шрифту, що підтримує кирилицю.
-    """
-    font_paths = [
-        "C:/Windows/Fonts/Arial.ttf",
-    ]
-
-    font_path = None
-    for path in font_paths:
+    """Завантажує .ttf шрифт із підтримкою кирилиці."""
+    for path in _FONT_CANDIDATES:
         if os.path.exists(path):
-            font_path = path
-            break
+            try:
+                return ImageFont.truetype(path, font_size)
+            except OSError as e:
+                print(f"ПОПЕРЕДЖЕННЯ: Не вдалося завантажити шрифт {path}: {e}")
+    print(
+        "ПОПЕРЕДЖЕННЯ: Не знайдено шрифтів Arial або DejaVuSans. "
+        "Кирилиця у таблиці може відображатися некоректно."
+    )
+    return ImageFont.load_default()
 
-    try:
-        if font_path:
-            return ImageFont.truetype(font_path, font_size)
-        else:
-            print(
-                "ПОПЕРЕДЖЕННЯ: Не знайдено шрифтів Arial або DejaVuSans. Спроба завантажити шрифт за замовчуванням."
-            )
-            return ImageFont.load_default()
-    except IOError as e:
-        print(f"ПОМИЛКА: Не вдалося завантажити шрифт {font_path}. {e}")
-        return ImageFont.load_default()
+
+def simulation_filename(simulation_name):
+    """'Флоатери (Діабет. рет.)' -> 'screenshot_флоатери_діабет_рет.png'"""
+    slug = re.sub(r"[^\w]+", "_", simulation_name.lower()).strip("_")
+    return f"screenshot_{slug}.png"
+
+
+def save_image(path, image):
+    """Зберігає зображення (підтримує не-ASCII шляхи на Windows)."""
+    is_success, buffer = cv2.imencode(".png", image)
+    if not is_success:
+        raise IOError("Не вдалося закодувати зображення у формат PNG")
+    with open(path, "wb") as f:
+        f.write(buffer)
 
 
 def generate_readability_report_table(
-    report_data, baseline_word_set, filename="screenshot_report_readability.png"
+    results, baseline_word_set, filename="screenshot_report_readability.png"
 ):
     """
-    Генерує зображення-таблицю зі статистикою читабельності (використовує Pillow).
+    Генерує зображення-таблицю зі статистикою читабельності (Pillow).
+    results: список SimulationResult.
     """
     print(f"Генерую таблицю звіту читабельності: {filename}...")
 
     font = _get_font(font_size=15)
-    header_font = _get_font(font_size=15)
     row_height = 30
-    col_widths = [240, 100, 100, 100, 100]
-    img_width = sum(col_widths) + 20
+    padding = 10
+    col_widths = [260, 90, 90, 100, 110, 110]
+    img_width = sum(col_widths) + 2 * padding
 
     baseline_count = len(baseline_word_set)
-
-    table_data = []
-    table_data.append(
-        ("[Симуляція]", "[Всього]", "[Збіг %]", "[Втрати %]", "[Артефакти]")
-    )
-    table_data.append(("Оригінал (База)", f"{baseline_count}", "100.0%", "0.0%", "0"))
-
-    for name, (sim_word_set, _, _) in sorted(report_data.items()):
-        sim_count = len(sim_word_set)
-        common_count = len(baseline_word_set.intersection(sim_word_set))
-        lost_count = len(baseline_word_set.difference(sim_word_set))
-        artifact_count = len(sim_word_set.difference(baseline_word_set))
-
-        overlap_perc = (
-            (common_count / baseline_count * 100) if baseline_count > 0 else 0
-        )
-        loss_perc = (lost_count / baseline_count * 100) if baseline_count > 0 else 0
-
+    table_data = [
+        ("Симуляція", "Всього", "Збіг %", "ILR %", "Артефакти", "Час, с"),
+        ("Оригінал (База)", f"{baseline_count}", "100.0%", "0.0%", "0", "—"),
+    ]
+    for result in sorted(results, key=lambda r: r.name):
+        m = compute_metrics(baseline_word_set, result.word_set)
         table_data.append(
             (
-                name,
-                f"{sim_count}",
-                f"{overlap_perc:.1f}%",
-                f"{loss_perc:.1f}%",
-                f"{artifact_count}",
+                result.name,
+                f"{m.sim_count}",
+                f"{m.overlap_ratio * 100:.1f}%",
+                f"{m.information_loss_ratio * 100:.1f}%",
+                f"{m.artifact_count}",
+                f"{result.total_time:.2f}",
             )
         )
 
-    img_height = row_height * len(table_data) + 20
+    img_height = row_height * len(table_data) + 2 * padding
     image = Image.new("RGB", (img_width, img_height), "white")
     draw = ImageDraw.Draw(image)
 
-    y_offset = 10
     for row_index, row in enumerate(table_data):
-        x_offset = 10
-        current_font = header_font if row_index == 0 else font
-
+        top = padding + row_index * row_height
+        if row_index == 0:
+            draw.rectangle(
+                [(padding // 2, top), (img_width - padding // 2, top + row_height)],
+                fill=(235, 235, 235),
+            )
+        x_offset = padding
         for i, cell in enumerate(row):
-            draw.text((x_offset, y_offset), str(cell), fill="black", font=current_font)
+            draw.text(
+                (x_offset, top + row_height // 2),
+                str(cell),
+                fill="black",
+                font=font,
+                anchor="lm",
+            )
             x_offset += col_widths[i]
-
-        y_offset += row_height
         draw.line(
-            [
-                (5, y_offset - int(row_height / 2) + 2),
-                (img_width - 5, y_offset - int(row_height / 2) + 2),
-            ],
+            [(padding // 2, top + row_height), (img_width - padding // 2, top + row_height)],
             fill=(200, 200, 200),
             width=1,
         )
 
-    try:
-        image.save(filename)
-        print(f"[Успішно] Таблицю читабельності збережено як {filename}")
-    except Exception as e:
-        print(f"[ПОМИЛКА] Не вдалося зберегти таблицю звіту: {e}")
+    image.save(filename)
+    print(f"[Успішно] Таблицю читабельності збережено як {filename}")
 
 
 def process_simulation(
-    simulation_name, simulation_func, original_image, baseline_word_data
+    simulation_name, simulation_func, original_image, baseline_word_data, output_dir="."
 ):
     """
-    Функція обробки з візуалізацією збігів та помилок.
+    Застосовує симуляцію, розпізнає текст і зберігає зображення з рамками:
+    зелені — збіг з оригіналом, помаранчеві — втрачені слова (позиції з оригіналу),
+    червоні — артефакти розпізнавання.
     """
     print(f"[В роботі]: Симуляція '{simulation_name}'...")
-    start_time = time.perf_counter()
 
+    start = time.perf_counter()
     simulated_image = simulation_func(original_image)
+    simulation_time = time.perf_counter() - start
 
+    start = time.perf_counter()
     sim_word_data = get_word_data(simulated_image)
+    ocr_time = time.perf_counter() - start
 
     sim_word_set = set(sim_word_data.keys())
     baseline_word_set = set(baseline_word_data.keys())
 
-    common_words_set = baseline_word_set.intersection(sim_word_set)
-    artifact_words_set = sim_word_set.difference(baseline_word_set)
-
     image_to_save = simulated_image.copy()
+    groups = (
+        (baseline_word_set & sim_word_set, sim_word_data, COLOR_COMMON),
+        (baseline_word_set - sim_word_set, baseline_word_data, COLOR_LOST),
+        (sim_word_set - baseline_word_set, sim_word_data, COLOR_ARTIFACT),
+    )
+    for words, boxes_by_word, color in groups:
+        for word in words:
+            for x, y, w, h in boxes_by_word[word]:
+                cv2.rectangle(image_to_save, (x, y), (x + w, y + h), color, 2)
 
-    # Зелені - спільні (правильно розпізнані)
-    color_common = (0, 200, 0)
-    for word in common_words_set:
-        for x, y, w, h in sim_word_data[word]:
-            cv2.rectangle(image_to_save, (x, y), (x + w, y + h), color_common, 2)
-
-    # Червоні - артефакти (хибно розпізнані)
-    color_artifact = (0, 0, 255)
-    for word in artifact_words_set:
-        for x, y, w, h in sim_word_data[word]:
-            cv2.rectangle(image_to_save, (x, y), (x + w, y + h), color_artifact, 2)
-
-    filename = f"screenshot_{simulation_name.lower().replace(' ', '_').replace('(', '').replace(')', '').replace(':', '')}.png"
+    filename = os.path.join(output_dir, simulation_filename(simulation_name))
     try:
-        is_success, buffer = cv2.imencode(".png", image_to_save)
-        if not is_success:
-            raise IOError("Не вдалося закодувати зображення у формат PNG")
-        with open(filename, "wb") as f:
-            f.write(buffer)
+        save_image(filename, image_to_save)
     except Exception as e:
         print(f"ПОМИЛКА: Не вдалося зберегти {filename}. Деталі: {e}")
         filename = None
 
-    end_time = time.perf_counter()
-    duration = end_time - start_time
-
     print(
-        f"[Завершено]: Симуляція '{simulation_name}'. Знайдено слів: {len(sim_word_set)}. Час: {duration:.2f} сек."
+        f"[Завершено]: Симуляція '{simulation_name}'. Знайдено слів: {len(sim_word_set)}. "
+        f"Симуляція: {simulation_time:.2f} с, OCR: {ocr_time:.2f} с."
     )
-
-    return simulation_name, sim_word_set, filename, duration
+    return SimulationResult(
+        simulation_name, sim_word_set, filename, simulation_time, ocr_time
+    )
