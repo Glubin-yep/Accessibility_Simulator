@@ -195,7 +195,7 @@ def test_input_not_modified(text_image):
 
 ```python
 def test_tile_fixations_centres():
-    assert tile_fixations(3000, 1000, 1440) == [(500, 720), (500, 2160), (500, 2880)]
+    assert tile_fixations(3000, 1000, 1440) == [(500, 720), (500, 2160), (500, 2940)]
 
 def test_single_partial_tile():
     assert tile_fixations(500, 800, 1440) == [(400, 250)]
