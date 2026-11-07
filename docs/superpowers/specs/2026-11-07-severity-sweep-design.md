@@ -236,7 +236,7 @@ onset_ilr, breaking_ilr, workers, ocr=get_word_data, image_sink=None)`:
   "models": [
     {"key": "cataract", "name": "Катаракта", "unit": "logMAR",
      "failed": false,
-     "onset": {"severity": 0.21, "clinical_label": "20/30"},
+     "onset": {"severity": 0.21, "clinical": 0.21, "clinical_label": "20/30"},
      "breaking": null,
      "points": [{"severity": 0.1, "clinical": 0.1,
                  "clinical_label": "20/25", "ilr": 0.02, "error": null}]}
