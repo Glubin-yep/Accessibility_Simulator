@@ -22,7 +22,8 @@ def test_dpr_makes_css_pixel_larger():
 
 
 @pytest.mark.parametrize(
-    "kwargs", [{"distance_cm": 0}, {"ppi": -1}, {"dpr": 0}, {"viewport_height_px": 0}]
+    "kwargs", [{"distance_cm": 0}, {"ppi": -1}, {"dpr": 0}, {"viewport_height_px": 0},
+              {"distance_cm": float("nan")}, {"ppi": float("nan")}, {"dpr": float("nan")}]
 )
 def test_invalid_values_raise(kwargs):
     with pytest.raises(ValueError):

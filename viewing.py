@@ -24,7 +24,7 @@ class ViewingConditions:
 
     def __post_init__(self):
         for name in ("distance_cm", "ppi", "dpr", "viewport_height_px"):
-            if getattr(self, name) <= 0:
+            if not getattr(self, name) > 0:
                 raise ValueError(f"{name} має бути додатним, отримано {getattr(self, name)}")
 
     @property

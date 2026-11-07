@@ -53,13 +53,13 @@ def test_lost_field_observer_parameters():
     assert LOST_FIELD_OBSERVER.cutoff_cpd == pytest.approx(30 * 10 ** -1.6)
 
 
-@pytest.mark.parametrize("f", [0.0, -1.0])
+@pytest.mark.parametrize("f", [0.0, -1.0, float("nan")])
 def test_non_positive_frequency_raises(f):
     with pytest.raises(ValueError):
         NORMAL_OBSERVER.log_sensitivity(f)
 
 
-@pytest.mark.parametrize("logmar, logcs", [(0, 0), (0, -1), (-0.5, 1.95)])
+@pytest.mark.parametrize("logmar, logcs", [(0, 0), (0, -1), (-0.5, 1.95), (0, float("nan")), (float("nan"), 1.95), (float("inf"), 1.95), (0, float("inf"))])
 def test_invalid_observer_raises(logmar, logcs):
     with pytest.raises(ValueError):
         ObserverCSF(logmar, logcs)

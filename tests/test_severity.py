@@ -59,3 +59,9 @@ def test_zero_severity_exact_at_default_viewport(key):
     img = rng.integers(0, 256, (1440, 2560, 3), dtype=np.uint8)
     v = ViewingConditions()
     np.testing.assert_array_equal(MODELS[key].simulate(img, 0.0, v), apply_observer(img, NORMAL_OBSERVER, v))
+
+
+@pytest.mark.parametrize("v, text", [(0.04, "0.04°"), (0.5, "0.5°"), (2.7, "2.7°"), (10, "10°")])
+def test_format_degrees(v, text):
+    from severity import format_degrees
+    assert format_degrees(v) == text

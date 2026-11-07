@@ -32,6 +32,8 @@ def format_snellen(logmar: float) -> str:
 
 
 def format_degrees(v: float) -> str:
+    if abs(v) < 1:
+        return f"{v:.2g}°"
     return f"{round(v, 1):g}°"
 
 

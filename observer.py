@@ -30,6 +30,8 @@ _MIN_LUMINANCE = 1e-4
 # NumPy звільняють GIL, а смуга вміщується в кеш процесора.
 _STRIPE_ROWS = 128
 _ENCODE_SCALE = float(GAMMA_ENCODE_LUT.size - 1)
+# Пул спільний для всіх потоків прогону (--sweep) за задумом. Задачі в _POOL
+# НІКОЛИ не повинні самі подавати задачі в _POOL і чекати на них: це дедлок.
 _POOL = ThreadPoolExecutor(max_workers=os.cpu_count() or 1)
 
 
@@ -45,7 +47,11 @@ class ObserverCSF:
     logcs: float
 
     def __post_init__(self):
-        if self.logcs <= 0:
+        if not (math.isfinite(self.logcs) and math.isfinite(self.logmar)):
+            raise ValueError(
+                f"logmar і logcs мають бути скінченними, отримано {self.logmar}, {self.logcs}"
+            )
+        if not self.logcs > 0:
             raise ValueError(f"logcs має бути додатним, отримано {self.logcs}")
         if self.logmar < _MIN_LOGMAR:
             raise ValueError(f"logmar має бути не менше {_MIN_LOGMAR}, отримано {self.logmar}")
@@ -73,7 +79,7 @@ class ObserverCSF:
         Для f < fmax значення усікається знизу на рівні log10 γmax − δ.
         """
         f = np.asarray(f_cpd, dtype=float)
-        if np.any(f <= 0):
+        if not np.all(f > 0):
             raise ValueError("частота має бути додатною")
 
         log_ratio = np.log10(f / self.fmax_cpd) / (_BETA_LOG / 2.0)
