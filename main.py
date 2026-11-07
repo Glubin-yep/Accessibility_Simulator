@@ -229,12 +229,15 @@ def sweep_url(url, output_dir, args, viewing):
     original_image, baseline_word_data = prepared
     baseline_word_set = set(baseline_word_data.keys())
     sweep_dir = os.path.join(output_dir, "sweep")
-    os.makedirs(sweep_dir, exist_ok=True)
+    images_dir = os.path.join(sweep_dir, "images")
+    try:
+        os.makedirs(images_dir if args.save_sweep_images else sweep_dir, exist_ok=True)
+    except OSError as e:
+        print(f"ПОМИЛКА: не вдалося створити теку результатів прогону: {e}")
+        return False
 
     image_sink = None
     if args.save_sweep_images:
-        images_dir = os.path.join(sweep_dir, "images")
-        os.makedirs(images_dir, exist_ok=True)
 
         def image_sink(model_key, s, image):
             save_image(os.path.join(images_dir, f"{model_key}_s{s:.2f}.png"), image)
@@ -271,17 +274,16 @@ def sweep_url(url, output_dir, args, viewing):
     )
     json_path = os.path.join(sweep_dir, "sweep.json")
     png_path = os.path.join(sweep_dir, "sweep_ilr.png")
+    print("\n" + format_sweep_table(curves, MODELS))
+    for line in format_error_summary(curves, MODELS):
+        print(line)
+    print(f"\nЧас прогону: {total_s:.2f} сек.")
     try:
         write_sweep_json(json_path, data)
         plot_sweep(png_path, curves, MODELS, onset, breaking)
     except OSError as e:
         print(f"ПОМИЛКА: не вдалося записати результати прогону: {e}")
         return False
-
-    print("\n" + format_sweep_table(curves, MODELS))
-    for line in format_error_summary(curves, MODELS):
-        print(line)
-    print(f"\nЧас прогону: {total_s:.2f} сек.")
     print(f"JSON: {json_path}")
     print(f"Графік: {png_path}")
 
