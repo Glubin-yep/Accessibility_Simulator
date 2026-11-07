@@ -8,8 +8,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 
-def _threshold_dict(model, severity):
-    """Поріг кривої у вигляді об'єкта звіту; None, якщо не досягнуто."""
+def _threshold_dict(model, severity, bounded=False):
+    """Поріг кривої у вигляді об'єкта звіту; None, якщо не досягнуто.
+
+    upper_bound -- поріг лежить у першому інтервалі сітки (0, s1]: це верхня межа s1.
+    """
     if severity is None:
         return None
     clinical = model.to_clinical(severity)
@@ -17,6 +20,7 @@ def _threshold_dict(model, severity):
         "severity": severity,
         "clinical": clinical,
         "clinical_label": model.format_clinical(clinical),
+        "upper_bound": bool(bounded),
     }
 
 
@@ -41,8 +45,8 @@ def sweep_to_dict(
                 "name": model.name,
                 "unit": model.unit,
                 "failed": curve.failed,
-                "onset": _threshold_dict(model, curve.onset),
-                "breaking": _threshold_dict(model, curve.breaking),
+                "onset": _threshold_dict(model, curve.onset, curve.onset_bounded),
+                "breaking": _threshold_dict(model, curve.breaking, curve.breaking_bounded),
                 "points": [
                     {
                         "severity": p.severity,
@@ -95,10 +99,21 @@ def plot_sweep(path, curves, models, onset_ilr, breaking_ilr):
             )
             ax.axhline(onset_ilr * 100, color="tab:orange", linestyle="--", linewidth=1)
             ax.axhline(breaking_ilr * 100, color="tab:red", linestyle="--", linewidth=1)
+            # Верхня межа (поріг у першому інтервалі сітки) -- штрихова лінія в s1.
             if curve.onset is not None:
-                ax.axvline(curve.onset, color="tab:orange", linestyle=":", linewidth=1)
+                ax.axvline(
+                    curve.onset,
+                    color="tab:orange",
+                    linestyle="--" if curve.onset_bounded else ":",
+                    linewidth=1,
+                )
             if curve.breaking is not None:
-                ax.axvline(curve.breaking, color="tab:red", linestyle=":", linewidth=1)
+                ax.axvline(
+                    curve.breaking,
+                    color="tab:red",
+                    linestyle="--" if curve.breaking_bounded else ":",
+                    linewidth=1,
+                )
             ax.set_xlim(0, 1)
             ax.set_ylim(0, 100)
             ax.set_title(model.name)
@@ -131,10 +146,13 @@ def plot_sweep(path, curves, models, onset_ilr, breaking_ilr):
         plt.close(fig)
 
 
-def _fmt_threshold(model, severity):
+def _fmt_threshold(model, severity, bounded=False):
     if severity is None:
         return "> 1.0"
-    return f"{severity:.2f} ({model.format_clinical(model.to_clinical(severity))})"
+    label = model.format_clinical(model.to_clinical(severity))
+    if bounded:
+        return f"≤ {severity:.2f} (≤ {label})"
+    return f"{severity:.2f} ({label})"
 
 
 def format_sweep_table(curves, models):
@@ -148,11 +166,24 @@ def format_sweep_table(curves, models):
             rows.append(
                 (
                     model.name,
-                    _fmt_threshold(model, curve.onset),
-                    _fmt_threshold(model, curve.breaking),
+                    _fmt_threshold(model, curve.onset, curve.onset_bounded),
+                    _fmt_threshold(model, curve.breaking, curve.breaking_bounded),
                 )
             )
     widths = [max(len(r[i]) for r in rows) for i in range(3)]
     lines = [" | ".join(c.ljust(w) for c, w in zip(r, widths)) for r in rows]
     lines.insert(1, "-+-".join("-" * w for w in widths))
     return "\n".join(lines)
+
+
+def format_error_summary(curves, models):
+    """Рядки про помилкові точки: на модель -- кількість і перше повідомлення."""
+    lines = []
+    for curve in curves:
+        errors = [p for p in curve.points if p.error is not None]
+        if errors:
+            name = models[curve.model_key].name
+            lines.append(
+                f"{name}: {len(errors)} помилкових точок, перша: {errors[0].error}"
+            )
+    return lines

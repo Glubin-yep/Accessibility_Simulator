@@ -22,6 +22,24 @@ class SweepCurve:
     onset: float | None
     breaking: float | None
     failed: bool = False
+    onset_bounded: bool = False
+    breaking_bounded: bool = False
+
+
+def _first_crossing(points, threshold):
+    """(інтерпольоване s, s1, чи нижня опора -- s = 0) для першого перетину або None."""
+    ok = sorted((p for p in points if p.ilr is not None), key=lambda p: p.severity)
+    prev = None
+    for p in ok:
+        if p.ilr >= threshold:
+            if prev is None or p.ilr == prev.ilr:
+                return p.severity, p.severity, prev is None or prev.severity <= 0
+            interpolated = prev.severity + (threshold - prev.ilr) * (
+                p.severity - prev.severity
+            ) / (p.ilr - prev.ilr)
+            return interpolated, p.severity, prev.severity <= 0
+        prev = p
+    return None
 
 
 def find_threshold(points, threshold):
@@ -29,17 +47,22 @@ def find_threshold(points, threshold):
 
     Точки з помилками (ilr is None) пропускаються.
     """
-    ok = sorted((p for p in points if p.ilr is not None), key=lambda p: p.severity)
-    prev = None
-    for p in ok:
-        if p.ilr >= threshold:
-            if prev is None or p.ilr == prev.ilr:
-                return p.severity
-            return prev.severity + (threshold - prev.ilr) * (
-                p.severity - prev.severity
-            ) / (p.ilr - prev.ilr)
-        prev = p
-    return None
+    crossing = _first_crossing(points, threshold)
+    return None if crossing is None else crossing[0]
+
+
+def find_threshold_bounded(points, threshold):
+    """Як find_threshold, але повертає (тяжкість, є_верхньою_межею).
+
+    Якщо перетин лежить у (0, s1] (нижня опорна точка інтерполяції -- несимульований
+    s = 0), це лише верхня межа: повертається s1 (перша симульована точка >= порогу).
+    Не досягнуто -> (None, False).
+    """
+    crossing = _first_crossing(points, threshold)
+    if crossing is None:
+        return None, False
+    interpolated, first_point, bounded = crossing
+    return (first_point if bounded else interpolated), bounded
 
 
 def _make_point(model, s, image, viewing, baseline_word_set, ocr, image_sink):
@@ -48,7 +71,12 @@ def _make_point(model, s, image, viewing, baseline_word_set, ocr, image_sink):
     try:
         simulated = model.simulate(image, s, viewing)
         if image_sink is not None:
-            image_sink(model.key, s, simulated)
+            try:
+                image_sink(model.key, s, simulated)
+            except Exception as exc:
+                print(
+                    f"Попередження: не вдалося зберегти зображення ({model.key}, s={s:.2f}): {exc}"
+                )
         words = ocr(simulated)
         ilr = compute_metrics(baseline_word_set, words.keys()).information_loss_ratio
         return SweepPoint(s, clinical, label, ilr)
@@ -70,15 +98,22 @@ def run_sweep(
 ):
     """Прогін кожної моделі по сітці s_i = i / steps; повертає криві в порядку models."""
     grid = [i / steps for i in range(1, steps + 1)]
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    executor = ThreadPoolExecutor(max_workers=workers)
+    try:
+        # По колу між моделями: одночасні точки належать різним моделям,
+        # тож піки пам'яті (поле зору) не збігаються.
         futures = {
-            (m.key, s): pool.submit(
+            (m.key, s): executor.submit(
                 _make_point, m, s, image, viewing, baseline_word_set, ocr, image_sink
             )
-            for m in models
             for s in grid
+            for m in models
         }
         results = {k: f.result() for k, f in futures.items()}
+    except KeyboardInterrupt:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    executor.shutdown()
 
     curves = []
     for m in models:
@@ -87,13 +122,13 @@ def run_sweep(
         points = [zero] + [results[(m.key, s)] for s in grid]
         errors = sum(1 for p in points if p.error is not None)
         failed = errors > steps / 2
+        onset, onset_bounded = (None, False) if failed else find_threshold_bounded(points, onset_ilr)
+        breaking, breaking_bounded = (
+            (None, False) if failed else find_threshold_bounded(points, breaking_ilr)
+        )
         curves.append(
             SweepCurve(
-                m.key,
-                points,
-                None if failed else find_threshold(points, onset_ilr),
-                None if failed else find_threshold(points, breaking_ilr),
-                failed,
+                m.key, points, onset, breaking, failed, onset_bounded, breaking_bounded
             )
         )
     return curves
