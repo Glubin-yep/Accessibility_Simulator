@@ -20,7 +20,13 @@ from observer import NORMAL_OBSERVER, apply_observer
 from reporting import generate_readability_report_table, process_simulation, save_image
 from severity import MODELS
 from sweep import run_sweep
-from sweep_report import format_sweep_table, plot_sweep, sweep_to_dict, write_sweep_json
+from sweep_report import (
+    format_error_summary,
+    format_sweep_table,
+    plot_sweep,
+    sweep_to_dict,
+    write_sweep_json,
+)
 from viewing import ViewingConditions
 from web_scraper import take_screenshot
 
@@ -80,6 +86,16 @@ def positive_float(value):
     return number
 
 
+def positive_int(value):
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Очікується ціле число, отримано '{value}'")
+    if number <= 0:
+        raise argparse.ArgumentTypeError("Значення має бути додатним цілим числом")
+    return number
+
+
 def viewing_from_args(args):
     return ViewingConditions(
         distance_cm=args.distance_cm,
@@ -115,7 +131,7 @@ def prepare_baseline(url, output_dir, args, viewing):
         print(
             f"Довідка: частота зрізу нормального спостерігача ({NORMAL_OBSERVER.cutoff_cpd:g} цикл/град) "
             f"вища за межу Найквіста екрана ({viewing.nyquist_cpd:.1f} цикл/град), тому легке "
-            "зниження гостроти не впливатиме на результат. Це очікувана поведінка, не помилка."
+            "зниження гостроти майже не впливатиме на результат. Це очікувана поведінка, не помилка."
         )
 
     print("Аналізую оригінальне зображення (базова лінія)...")
@@ -255,10 +271,16 @@ def sweep_url(url, output_dir, args, viewing):
     )
     json_path = os.path.join(sweep_dir, "sweep.json")
     png_path = os.path.join(sweep_dir, "sweep_ilr.png")
-    write_sweep_json(json_path, data)
-    plot_sweep(png_path, curves, MODELS, onset, breaking)
+    try:
+        write_sweep_json(json_path, data)
+        plot_sweep(png_path, curves, MODELS, onset, breaking)
+    except OSError as e:
+        print(f"ПОМИЛКА: не вдалося записати результати прогону: {e}")
+        return False
 
     print("\n" + format_sweep_table(curves, MODELS))
+    for line in format_error_summary(curves, MODELS):
+        print(line)
     print(f"\nЧас прогону: {total_s:.2f} сек.")
     print(f"JSON: {json_path}")
     print(f"Графік: {png_path}")
@@ -274,7 +296,10 @@ def parse_viewport(value):
     match = re.fullmatch(r"(\d+)[xX×](\d+)", value.strip())
     if not match:
         raise argparse.ArgumentTypeError("Формат: ШИРИНАxВИСОТА, наприклад 2560x1440")
-    return int(match.group(1)), int(match.group(2))
+    width, height = int(match.group(1)), int(match.group(2))
+    if width <= 0 or height <= 0:
+        raise argparse.ArgumentTypeError("Ширина і висота мають бути додатними")
+    return width, height
 
 
 def build_parser():
@@ -312,9 +337,9 @@ def build_parser():
     )
     parser.add_argument(
         "--workers",
-        type=int,
+        type=positive_int,
         default=None,
-        help="Кількість паралельних потоків (default: %d; 1 — послідовно, для точних замірів часу)."
+        help="Кількість паралельних потоків, додатне ціле (default: %d; 1 — послідовно, для точних замірів часу)."
         % config.DEFAULT_WORKERS,
     )
     parser.add_argument(
@@ -383,6 +408,8 @@ def main(argv=None):
         parser.error("потрібно 0 < --onset-ilr < --breaking-ilr <= 100")
     if args.sweep and args.max_ilr is not None:
         print("Попередження: --max-ilr ігнорується в режимі --sweep.")
+    if args.save_sweep_images and not args.sweep:
+        print("Попередження: --save-sweep-images ігнорується без --sweep.")
 
     if not configure_tesseract(args.tesseract_cmd):
         return EXIT_ERROR

@@ -109,3 +109,32 @@ def test_sweep_failed_model_exit_2(monkeypatch, tmp_path, text_image):
         ["--sweep", "--sweep-steps", "2", "--output-dir", str(tmp_path), "--workers", "1"]
     )
     assert code == 2
+
+
+@pytest.mark.parametrize("argv", [["--workers", "0"], ["--workers", "-2"], ["--viewport", "0x800"], ["--viewport", "1280x0"]])
+def test_non_positive_workers_viewport_rejected(argv):
+    with pytest.raises(SystemExit) as e:
+        main.build_parser().parse_args(argv)
+    assert e.value.code == 2
+
+
+def test_save_images_without_sweep_warns(monkeypatch, capsys):
+    monkeypatch.setattr(main, "configure_tesseract", lambda cmd: False)
+    main.main(["--save-sweep-images"])
+    assert "--save-sweep-images ігнорується" in capsys.readouterr().out
+
+
+def test_sweep_output_oserror_exit_2(monkeypatch, tmp_path, text_image, capsys):
+    monkeypatch.setattr(main, "configure_tesseract", lambda cmd: True)
+    monkeypatch.setattr(
+        main, "take_screenshot", lambda url, path, **kw: (save_image(path, text_image), path)[1]
+    )
+    monkeypatch.setattr(main, "get_word_data", lambda img: {"a": [], "b": []})
+
+    def boom(path, data):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(main, "write_sweep_json", boom)
+    code = main.main(["--sweep", "--sweep-steps", "2", "--output-dir", str(tmp_path), "--workers", "1"])
+    assert code == 2
+    assert "ПОМИЛКА" in capsys.readouterr().out
