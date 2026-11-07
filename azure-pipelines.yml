@@ -1,28 +1,24 @@
-# Python package
-# Create and test a Python package on multiple Python versions.
-# Add steps that analyze code, save the dist with the build record, publish to a PyPI-compatible index, and more:
+# Unit-тести симулятора (не потребують Tesseract і Chrome).
 # https://docs.microsoft.com/azure/devops/pipelines/languages/python
 
 trigger:
 - main
-
 
 pool:
  name: default #agent pool
  demands:
  - agent.name -equals DESKTOP-7ELQFO1 #self-hosted agent
 
-
 strategy:
   matrix:
-    Python38:
-      python.version: '3.8'
-    Python39:
-      python.version: '3.9'
     Python310:
       python.version: '3.10'
     Python311:
       python.version: '3.11'
+    Python312:
+      python.version: '3.12'
+    Python313:
+      python.version: '3.13'
 
 steps:
 - task: UsePythonVersion@0
@@ -32,10 +28,16 @@ steps:
 
 - script: |
     python -m pip install --upgrade pip
-    pip install -r requirements.txt
+    pip install -r requirements.txt -r requirements-dev.txt
+    pip install pytest-azurepipelines
   displayName: 'Install dependencies'
 
 - script: |
-    pip install pytest pytest-azurepipelines
-    pytest
+    python -m pytest
   displayName: 'pytest'
+
+# Приклад порогу якості для перевірки реального сайту (потребує Tesseract і Chrome
+# на агенті): збірка впаде з кодом 1, якщо ILR будь-якої симуляції > 30%.
+# - script: |
+#     python main.py --url https://example.com --max-ilr 30
+#   displayName: 'Accessibility quality gate'
