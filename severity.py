@@ -86,6 +86,9 @@ def _scotoma(image, s, viewing):
 
 
 def _tunnel(image, s, viewing):
+    if s == 0.0:
+        # s = 0 означає відсутність втрати поля (радіус 30° не покриває кути фрагмента).
+        return apply_observer(image, NORMAL_OBSERVER, viewing)
     return _field_loss(image, viewing, 30.0 - 28.0 * s, False)
 
 

@@ -51,3 +51,11 @@ def test_severe_models_change_image(text_image):
     base = apply_observer(text_image, NORMAL_OBSERVER, v)
     for key in ("cataract", "contrast", "scotoma", "protanomaly", "metamorphopsia"):
         assert not np.array_equal(MODELS[key].simulate(text_image, 1.0, v), base), key
+
+
+@pytest.mark.parametrize("key", ["tunnel", "scotoma"])
+def test_zero_severity_exact_at_default_viewport(key):
+    rng = np.random.default_rng(0)
+    img = rng.integers(0, 256, (1440, 2560, 3), dtype=np.uint8)
+    v = ViewingConditions()
+    np.testing.assert_array_equal(MODELS[key].simulate(img, 0.0, v), apply_observer(img, NORMAL_OBSERVER, v))
