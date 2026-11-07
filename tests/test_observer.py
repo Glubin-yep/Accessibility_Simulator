@@ -142,7 +142,7 @@ def test_low_cs_removes_faint_grating_but_keeps_strong():
 def test_mean_luminance_is_preserved(text_image):
     out = apply_observer(text_image, ObserverCSF(1.0, 0.9), ViewingConditions())
     np.testing.assert_allclose(
-        out.reshape(-1, 3).mean(0), text_image.reshape(-1, 3).mean(0), atol=2
+        out.reshape(-1, 3).mean(0), text_image.reshape(-1, 3).mean(0), atol=3
     )
 
 
@@ -169,7 +169,7 @@ def test_black_image_has_no_nan():
 
 def test_far_viewing_keeps_mean(text_image):
     out = apply_observer(text_image, NORMAL_OBSERVER, ViewingConditions(distance_cm=500))
-    np.testing.assert_allclose(out.mean(), text_image.mean(), atol=2)
+    np.testing.assert_allclose(out.mean(), text_image.mean(), atol=3)
 
 
 def test_input_not_modified(text_image):

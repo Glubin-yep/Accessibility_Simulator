@@ -22,6 +22,11 @@ _MIN_LOGMAR = -0.3
 # Центр рівня 0 піраміди Лапласа, цикл/піксель: геометричне середнє частоти
 # половинного підсилення рівня 0 (виміряної синусоїдальними ґратками) і Найквіста.
 PYRAMID_F0 = 0.2565
+# Чутливість для смуги оцінюється на її нижньому краю f_k/√2 (смуга займає
+# октаву [f_k/√2, f_k·√2]). Вище піку CSF це найпомітніша частота смуги: смуга
+# зберігається, поки видима хоч якась її частина. Оцінка в центрі давала
+# систематичне зміщення ≈ +0.2 logMAR (див. калібрувальний тест, специфікація §3).
+BAND_EVALUATION_FACTOR = 2.0**-0.5
 _MIN_BAND_CPD = 0.25
 _MIN_LEVEL_SIDE = 8
 _MIN_LUMINANCE = 1e-4
@@ -101,7 +106,8 @@ LOST_FIELD_OBSERVER = ObserverCSF(1.6, 0.3)
 def _band_thresholds(shape, csf, viewing):
     """Повертає множники порогу 10**(−log S(f_k)) для смуг піраміди.
 
-    Рівень k має центр PYRAMID_F0 / 2**k цикл/піксель оригіналу; рівні
+    Рівень k має центр PYRAMID_F0 / 2**k цикл/піксель оригіналу, а чутливість
+    береться на нижньому краю смуги (центр · BAND_EVALUATION_FACTOR); рівні
     додаються, поки менша сторона рівня ≥ 8 px і центр смуги ≥ 0.25 цикл/град.
     """
     factors = []
@@ -111,7 +117,7 @@ def _band_thresholds(shape, csf, viewing):
         f_cpd = viewing.cycles_per_px_to_cpd(PYRAMID_F0 / 2**k)
         if f_cpd < _MIN_BAND_CPD:
             break
-        factors.append(10.0 ** -csf.log_sensitivity(f_cpd))
+        factors.append(10.0 ** -csf.log_sensitivity(f_cpd * BAND_EVALUATION_FACTOR))
         h, w = (h + 1) // 2, (w + 1) // 2
         k += 1
     return factors
