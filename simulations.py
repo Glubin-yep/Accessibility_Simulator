@@ -27,6 +27,61 @@ def _odd_ksize(ksize, minimum=3):
 # --- ПОМУТНІННЯ КРИШТАЛИКА ---
 
 
+def cataract_optics(image, yellow_b, yellow_g, glare_weight):
+    """
+    Оптичні кроки катаракти без розмиття: множники синього/зеленого каналів
+    (пожовтіння), потім лінійна інтерполяція з білим шаром (засвітка).
+    При (1.0, 1.0, 0.0) повертає вхід без змін.
+    """
+    b, g, r = cv2.split(image)
+    b_yellowed = cv2.multiply(b, yellow_b).astype(np.uint8)
+    g_yellowed = cv2.multiply(g, yellow_g).astype(np.uint8)
+    img_yellowed = cv2.merge([b_yellowed, g_yellowed, r])
+    haze = np.full_like(img_yellowed, 255, dtype=np.uint8)
+    return cv2.addWeighted(img_yellowed, 1.0 - glare_weight, haze, glare_weight, 0)
+
+
+def tile_fixations(height, width, tile_height):
+    """
+    Центри фіксацій (x, y) для вертикальних плиток висотою tile_height;
+    остання плитка може бути неповною.
+    """
+    x = width // 2
+    fixations = []
+    top = 0
+    while top < height:
+        tile_h = min(tile_height, height - top)
+        fixations.append((x, top + tile_h // 2))
+        top += tile_h
+    return fixations
+
+
+def field_loss_mask(height, width, radius_px, feather_sigma_px, tile_height, lose_inside):
+    """
+    Маска втрати поля зору float32 (height, width), 1 = втрачено.
+    Об'єднання кіл радіусом radius_px навколо кожної фіксації з розмиттям Гауса;
+    lose_inside=False інвертує маску (тунельний зір).
+    """
+    mask = np.zeros((height, width), dtype=np.float32)
+    if radius_px > 0:
+        for x, y in tile_fixations(height, width, tile_height):
+            cv2.circle(mask, (x, y), int(round(radius_px)), 1.0, thickness=-1)
+        if feather_sigma_px > 0:
+            mask = cv2.GaussianBlur(mask, (0, 0), feather_sigma_px)
+        mask = np.clip(mask, 0.0, 1.0).astype(np.float32)
+    return mask if lose_inside else (1.0 - mask).astype(np.float32)
+
+
+def blend_by_mask(intact, lost, mask):
+    """
+    Змішує зображення за маскою: intact·(1−m) + lost·m, округлення до uint8.
+    При m == 0 результат дорівнює intact.
+    """
+    m = np.asarray(mask, dtype=np.float32)[..., None]
+    out = intact.astype(np.float32) * (1.0 - m) + lost.astype(np.float32) * m
+    return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+
+
 def simulate_cataract(
     image,
     blur_ksize=15,
@@ -39,18 +94,14 @@ def simulate_cataract(
     пожовтіння (поглинання синього/зеленого), розсіювання (розмиття) та засвітка.
     """
     # 1. Пожовтіння
-    b, g, r = cv2.split(image)
-    b_yellowed = cv2.multiply(b, yellow_b_factor).astype(np.uint8)
-    g_yellowed = cv2.multiply(g, yellow_g_factor).astype(np.uint8)
-    img_yellowed = cv2.merge([b_yellowed, g_yellowed, r])
+    img_yellowed = cataract_optics(image, yellow_b_factor, yellow_g_factor, 0.0)
 
     # 2. Розсіювання світла
     blur_ksize = _odd_ksize(blur_ksize, minimum=1)
     img_blurred = cv2.GaussianBlur(img_yellowed, (blur_ksize, blur_ksize), 0)
 
     # 3. Засвітка (лінійна інтерполяція з білим шаром)
-    haze = np.full_like(img_blurred, 255, dtype=np.uint8)
-    return cv2.addWeighted(img_blurred, 1.0 - glare_weight, haze, glare_weight, 0)
+    return cataract_optics(img_blurred, 1.0, 1.0, glare_weight)
 
 
 # --- ПОРУШЕННЯ КОЛЬОРОСПРИЙНЯТТЯ ---

@@ -91,3 +91,46 @@ def test_cataract_yellows_and_hazes():
     img = np.full((50, 50, 3), 100, dtype=np.uint8)
     b, g, r = sim.simulate_cataract(img, blur_ksize=3, glare_weight=0.2)[25, 25]
     assert b < g < r
+
+
+def test_tile_fixations_centres():
+    # Остання плитка неповна (120 px): центр = 2880 + 120 // 2.
+    assert sim.tile_fixations(3000, 1000, 1440) == [(500, 720), (500, 2160), (500, 2940)]
+
+
+def test_single_partial_tile():
+    assert sim.tile_fixations(500, 800, 1440) == [(400, 250)]
+
+
+def test_scotoma_mask_lost_at_fixation_intact_far_away():
+    m = sim.field_loss_mask(2880, 1000, radius_px=100, feather_sigma_px=5, tile_height=1440, lose_inside=True)
+    assert m[720, 500] > 0.99 and m[2160, 500] > 0.99
+    assert m[720, 0] < 0.01
+
+
+def test_tunnel_mask_is_inverse_of_scotoma():
+    kw = dict(height=1440, width=1000, radius_px=200, feather_sigma_px=10, tile_height=1440)
+    np.testing.assert_allclose(
+        sim.field_loss_mask(lose_inside=True, **kw) + sim.field_loss_mask(lose_inside=False, **kw), 1, atol=1e-6
+    )
+
+
+def test_zero_radius_scotoma_loses_nothing():
+    assert sim.field_loss_mask(500, 500, 0, 5, 1440, lose_inside=True).max() < 1e-6
+
+
+def test_blend_by_mask_zero_mask_returns_intact_exactly(text_image):
+    lost = 255 - text_image
+    out = sim.blend_by_mask(text_image, lost, np.zeros(text_image.shape[:2], np.float32))
+    np.testing.assert_array_equal(out, text_image)
+    assert out.dtype == np.uint8
+
+
+def test_blend_by_mask_full_mask_returns_lost(text_image):
+    lost = 255 - text_image
+    out = sim.blend_by_mask(text_image, lost, np.ones(text_image.shape[:2], np.float32))
+    np.testing.assert_array_equal(out, lost)
+
+
+def test_cataract_optics_identity_at_zero(text_image):
+    np.testing.assert_array_equal(sim.cataract_optics(text_image, 1.0, 1.0, 0.0), text_image)
