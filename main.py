@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import time
+from datetime import datetime
 from urllib.parse import unquote, urlparse
 
 import cv2
@@ -16,7 +17,10 @@ import pytesseract
 import config
 from analysis import TESSERACT_LANG, compute_metrics, get_word_data
 from observer import NORMAL_OBSERVER, apply_observer
-from reporting import generate_readability_report_table, process_simulation
+from reporting import generate_readability_report_table, process_simulation, save_image
+from severity import MODELS
+from sweep import run_sweep
+from sweep_report import format_sweep_table, plot_sweep, sweep_to_dict, write_sweep_json
 from viewing import ViewingConditions
 from web_scraper import take_screenshot
 
@@ -198,6 +202,74 @@ def analyze_url(url, output_dir, args):
     return ilr_by_simulation
 
 
+def sweep_url(url, output_dir, args, viewing):
+    """
+    Режим --sweep для однієї сторінки: еталон -> прогін моделей по шкалі -> sweep.json, PNG, таблиця.
+    Повертає False, якщо еталон не підготовлено або будь-яка модель завершилась помилкою.
+    """
+    prepared = prepare_baseline(url, output_dir, args, viewing)
+    if prepared is None:
+        return False
+    original_image, baseline_word_data = prepared
+    baseline_word_set = set(baseline_word_data.keys())
+    sweep_dir = os.path.join(output_dir, "sweep")
+    os.makedirs(sweep_dir, exist_ok=True)
+
+    image_sink = None
+    if args.save_sweep_images:
+        images_dir = os.path.join(sweep_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+
+        def image_sink(model_key, s, image):
+            save_image(os.path.join(images_dir, f"{model_key}_s{s:.2f}.png"), image)
+
+    onset = args.onset_ilr / 100
+    breaking = args.breaking_ilr / 100
+    models = list(MODELS.values())
+    print(f"Прогін {len(models)} моделей по шкалі ({args.sweep_steps} кроків)...")
+    wall_start = time.perf_counter()
+    curves = run_sweep(
+        original_image,
+        baseline_word_set,
+        models,
+        viewing,
+        steps=args.sweep_steps,
+        onset_ilr=onset,
+        breaking_ilr=breaking,
+        workers=args.workers or config.DEFAULT_WORKERS,
+        ocr=get_word_data,
+        image_sink=image_sink,
+    )
+    total_s = time.perf_counter() - wall_start
+
+    data = sweep_to_dict(
+        url,
+        viewing,
+        len(baseline_word_set),
+        onset,
+        breaking,
+        curves,
+        MODELS,
+        total_s,
+        datetime.now().isoformat(timespec="seconds"),
+    )
+    json_path = os.path.join(sweep_dir, "sweep.json")
+    png_path = os.path.join(sweep_dir, "sweep_ilr.png")
+    write_sweep_json(json_path, data)
+    plot_sweep(png_path, curves, MODELS, onset, breaking)
+
+    print("\n" + format_sweep_table(curves, MODELS))
+    print(f"\nЧас прогону: {total_s:.2f} сек.")
+    print(f"JSON: {json_path}")
+    print(f"Графік: {png_path}")
+
+    failed = [c.model_key for c in curves if c.failed]
+    if failed:
+        print(f"ПОМИЛКА: не вдалося обчислити моделі: {', '.join(failed)}.")
+        return False
+    return True
+
+
 def parse_viewport(value):
     match = re.fullmatch(r"(\d+)[xX×](\d+)", value.strip())
     if not match:
@@ -270,11 +342,47 @@ def build_parser():
         help="Поріг якості для CI/CD: якщо ILR будь-якої симуляції перевищує "
         "це значення (у відсотках), програма завершується з кодом 1.",
     )
+    parser.add_argument(
+        "--sweep",
+        action="store_true",
+        help="Режим прогону моделей вад зору по шкалі тяжкості замість звичайного аналізу.",
+    )
+    parser.add_argument(
+        "--sweep-steps",
+        type=int,
+        default=10,
+        help="Кількість точок сітки шкали, >= 2 (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--onset-ilr",
+        type=float,
+        default=5.0,
+        help="Поріг початку деградації, ILR у відсотках (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--breaking-ilr",
+        type=float,
+        default=50.0,
+        help="Точка руйнування, ILR у відсотках (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--save-sweep-images",
+        action="store_true",
+        help="Зберігати PNG для кожної точки шкали (лише з --sweep).",
+    )
     return parser
 
 
 def main(argv=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.sweep_steps < 2:
+        parser.error("--sweep-steps має бути не менше 2")
+    if not (0 < args.onset_ilr < args.breaking_ilr <= 100):
+        parser.error("потрібно 0 < --onset-ilr < --breaking-ilr <= 100")
+    if args.sweep and args.max_ilr is not None:
+        print("Попередження: --max-ilr ігнорується в режимі --sweep.")
 
     if not configure_tesseract(args.tesseract_cmd):
         return EXIT_ERROR
@@ -289,6 +397,10 @@ def main(argv=None):
             if len(urls) == 1
             else os.path.join(args.output_dir, url_to_dirname(url))
         )
+        if args.sweep:
+            if not sweep_url(url, output_dir, args, viewing_from_args(args)):
+                exit_code = EXIT_ERROR
+            continue
         ilr_by_simulation = analyze_url(url, output_dir, args)
         if ilr_by_simulation is None:
             exit_code = EXIT_ERROR
