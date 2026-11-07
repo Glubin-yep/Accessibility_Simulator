@@ -1,4 +1,4 @@
-# Unit-тести симулятора (не потребують Tesseract і Chrome).
+# Unit-тести симулятора (не потребують Tesseract і Chrome; тести з маркером tesseract виключені).
 # https://docs.microsoft.com/azure/devops/pipelines/languages/python
 
 trigger:
@@ -33,7 +33,7 @@ steps:
   displayName: 'Install dependencies'
 
 - script: |
-    python -m pytest
+    python -m pytest -m "not tesseract"
   displayName: 'pytest'
 
 # Приклад порогу якості для перевірки реального сайту (потребує Tesseract і Chrome
