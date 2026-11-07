@@ -6,14 +6,6 @@ import config
 import simulations as sim
 
 
-@pytest.fixture
-def text_image():
-    img = np.full((240, 320, 3), 230, dtype=np.uint8)
-    cv2.putText(img, "Text", (20, 140), cv2.FONT_HERSHEY_SIMPLEX, 2.5, (40, 40, 40), 5)
-    cv2.rectangle(img, (220, 30), (300, 90), (30, 60, 200), -1)
-    return img
-
-
 @pytest.mark.parametrize("name", list(config.SIMULATIONS))
 def test_every_configured_simulation_keeps_shape_and_dtype(name, text_image):
     out = config.SIMULATIONS[name](text_image.copy())
