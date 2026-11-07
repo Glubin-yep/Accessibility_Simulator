@@ -1,6 +1,7 @@
 import argparse
 import concurrent.futures
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -14,7 +15,9 @@ import pytesseract
 
 import config
 from analysis import TESSERACT_LANG, compute_metrics, get_word_data
+from observer import NORMAL_OBSERVER, apply_observer
 from reporting import generate_readability_report_table, process_simulation
+from viewing import ViewingConditions
 from web_scraper import take_screenshot
 
 WINDOWS_DEFAULT_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -63,10 +66,29 @@ def load_image(path):
     return cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
 
 
-def analyze_url(url, output_dir, args):
+def positive_float(value):
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Очікується число, отримано '{value}'")
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("Значення має бути додатним скінченним числом")
+    return number
+
+
+def viewing_from_args(args):
+    return ViewingConditions(
+        distance_cm=args.distance_cm,
+        ppi=args.ppi,
+        dpr=args.dpr,
+        viewport_height_px=args.viewport[1],
+    )
+
+
+def prepare_baseline(url, output_dir, args, viewing):
     """
-    Повний цикл аналізу однієї сторінки.
-    Повертає список (назва симуляції, ILR) або None у разі помилки.
+    Скріншот -> нормальний спостерігач -> OCR еталона.
+    Повертає (оригінальне зображення, word_data еталона) або None у разі помилки.
     """
     os.makedirs(output_dir, exist_ok=True)
     original_path = os.path.join(output_dir, config.ORIGINAL_FILENAME)
@@ -85,18 +107,42 @@ def analyze_url(url, output_dir, args):
         print("Не вдалося завантажити оригінальний скріншот.")
         return None
 
+    if NORMAL_OBSERVER.cutoff_cpd > viewing.nyquist_cpd:
+        print(
+            f"Довідка: частота зрізу нормального спостерігача ({NORMAL_OBSERVER.cutoff_cpd:g} цикл/град) "
+            f"вища за межу Найквіста екрана ({viewing.nyquist_cpd:.1f} цикл/град), тому легке "
+            "зниження гостроти не впливатиме на результат. Це очікувана поведінка, не помилка."
+        )
+
     print("Аналізую оригінальне зображення (базова лінія)...")
-    baseline_word_data = get_word_data(original_image)
-    baseline_word_set = set(baseline_word_data.keys())
-    baseline_word_count = len(baseline_word_set)
+    baseline_word_data = get_word_data(apply_observer(original_image, NORMAL_OBSERVER, viewing))
+    baseline_word_count = len(baseline_word_data)
     print(f"Базова лінія: {baseline_word_count} унікальних слів знайдено.\n")
     if baseline_word_count == 0:
         print("ПОМИЛКА: На оригінальному зображенні не розпізнано жодного слова.")
         return None
+    return original_image, baseline_word_data
+
+
+def analyze_url(url, output_dir, args):
+    """
+    Повний цикл аналізу однієї сторінки.
+    Повертає список (назва симуляції, ILR) або None у разі помилки.
+    """
+    viewing = viewing_from_args(args)
+    prepared = prepare_baseline(url, output_dir, args, viewing)
+    if prepared is None:
+        return None
+    original_image, baseline_word_data = prepared
+    original_path = os.path.join(output_dir, config.ORIGINAL_FILENAME)
+    baseline_word_set = set(baseline_word_data.keys())
+    baseline_word_count = len(baseline_word_set)
+    max_workers = args.workers or config.DEFAULT_WORKERS
+    simulations = config.build_simulations(viewing)
 
     wall_start = time.perf_counter()
     results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
                 process_simulation,
@@ -106,7 +152,7 @@ def analyze_url(url, output_dir, args):
                 baseline_word_data,
                 output_dir,
             )
-            for name, func in config.SIMULATIONS.items()
+            for name, func in simulations.items()
         ]
         for future in concurrent.futures.as_completed(futures):
             results.append(future.result())
@@ -125,7 +171,7 @@ def analyze_url(url, output_dir, args):
     print(f"Оригінальний файл: {original_path}")
     print(f"Базова читабельність: {baseline_word_count} унікальних слів")
     print(f"Загальний час обробки симуляцій (реальний): {wall_time:.2f} сек.")
-    if (args.workers or 0) != 1:
+    if max_workers != 1:
         print(
             "  Примітка: симуляції виконувались паралельно, тому час окремих симуляцій\n"
             "  нижче завищений через конкуренцію за CPU. Для точних вимірювань: --workers 1"
@@ -196,7 +242,26 @@ def build_parser():
         "--workers",
         type=int,
         default=None,
-        help="Кількість паралельних потоків (1 — послідовно, для точних замірів часу).",
+        help="Кількість паралельних потоків (default: %d; 1 — послідовно, для точних замірів часу)."
+        % config.DEFAULT_WORKERS,
+    )
+    parser.add_argument(
+        "--distance-cm",
+        type=positive_float,
+        default=ViewingConditions.distance_cm,
+        help="Відстань від очей до екрана, см (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--ppi",
+        type=positive_float,
+        default=ViewingConditions.ppi,
+        help="Щільність пікселів екрана (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--dpr",
+        type=positive_float,
+        default=ViewingConditions.dpr,
+        help="Device pixel ratio (default: %(default)s).",
     )
     parser.add_argument(
         "--max-ilr",

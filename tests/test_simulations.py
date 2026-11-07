@@ -4,25 +4,38 @@ import pytest
 
 import config
 import simulations as sim
+from viewing import ViewingConditions
+
+SIMS = config.build_simulations(ViewingConditions())
 
 
-@pytest.mark.parametrize("name", list(config.SIMULATIONS))
+def test_preset_names_match_spec():
+    assert list(SIMS) == [
+        "Гострота зору (20/40)", "Гострота зору (20/100)", "Катаракта (20/40)", "Катаракта (20/100)",
+        "Втрата контрасту (log CS 1.20)", "Центральна скотома (5°)", "Тунельний зір (10°)",
+        "Протаномалія (Machado 0.6)", "Метаморфопсія (0.5°)", "Метаморфопсія (1.5°)",
+        "Ахроматопсія (Скотопічна)", "Протанопія (Brettel)", "Дейтеранопія (Brettel)",
+        "Тританопія (Brettel)", "Флоатери (Діабет. рет.)",
+    ]
+
+
+@pytest.mark.parametrize("name", list(SIMS))
 def test_every_configured_simulation_keeps_shape_and_dtype(name, text_image):
-    out = config.SIMULATIONS[name](text_image.copy())
+    out = SIMS[name](text_image.copy())
     assert out.shape == text_image.shape
     assert out.dtype == np.uint8
 
 
-@pytest.mark.parametrize("name", list(config.SIMULATIONS))
+@pytest.mark.parametrize("name", list(SIMS))
 def test_every_configured_simulation_changes_the_image(name, text_image):
     """Жодна симуляція з конфігурації не повинна бути заглушкою."""
-    out = config.SIMULATIONS[name](text_image.copy())
+    out = SIMS[name](text_image.copy())
     assert not np.array_equal(out, text_image)
 
 
 def test_simulations_do_not_modify_input(text_image):
     original = text_image.copy()
-    for func in config.SIMULATIONS.values():
+    for func in SIMS.values():
         func(text_image)
     np.testing.assert_array_equal(text_image, original)
 
