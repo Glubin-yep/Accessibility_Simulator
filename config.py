@@ -1,6 +1,8 @@
 import functools
 
 import simulations as sim
+from observer import NORMAL_OBSERVER, apply_observer
+from severity import MODELS, preset_name
 
 # URL за замовчуванням (можна перевизначити аргументом --url)
 URL_TO_ANALYZE = "https://uk.wikipedia.org/wiki/%D0%93%D0%BE%D0%BB%D0%BE%D0%B2%D0%BD%D0%B0_%D1%81%D1%82%D0%BE%D1%80%D1%96%D0%BD%D0%BA%D0%B0"
@@ -18,43 +20,55 @@ REPORT_FILENAME = "screenshot_report_readability.png"
 # Зерно для випадкових симуляцій (флоатери) — для відтворюваності результатів
 RANDOM_SEED = 42
 
-SIMULATIONS = {
-    # Катаракта (різної сили)
-    "Катаракта (Легка)": functools.partial(
-        sim.simulate_cataract, blur_ksize=7, glare_weight=0.1
-    ),
-    "Катаракта (Сильна)": functools.partial(
-        sim.simulate_cataract, blur_ksize=21, glare_weight=0.3
-    ),
-    "Ахроматопсія (Скотопічна)": sim.simulate_achromatopsia_scotopic,
-    "Протанопія (Brettel)": functools.partial(
-        sim.simulate_dichromacy_brettel, sim_type="protanopia"
-    ),
-    "Дейтеранопія (Brettel)": functools.partial(
-        sim.simulate_dichromacy_brettel, sim_type="deuteranopia"
-    ),
-    "Тританопія (Brettel)": functools.partial(
-        sim.simulate_dichromacy_brettel, sim_type="tritanopia"
-    ),
-    "Протаномалія (Machado)": functools.partial(
-        sim.simulate_anomalous_trichromacy_machado, sim_type="protanomaly", severity=0.6
-    ),
-    "Метаморфопсія (Легка)": functools.partial(
-        sim.simulate_metamorphopsia, amplitude=8, frequency=0.03
-    ),
-    "Метаморфопсія (Сильна)": functools.partial(
-        sim.simulate_metamorphopsia, amplitude=15, frequency=0.05
-    ),
-    "Центральна Скотома (AMD)": functools.partial(
-        sim.simulate_central_scotoma, radius_percentage=0.2
-    ),
-    "Тунельний Зір (Глаукома)": functools.partial(
-        sim.simulate_tunnel_vision, aperture_percentage=0.5
-    ),
-    "Флоатери (Діабет. рет.)": functools.partial(
-        sim.simulate_floaters, num_floaters=30, max_size=50, seed=RANDOM_SEED
-    ),
-    "Втрата контрасту (CSF)": functools.partial(
-        sim.simulate_csf_loss, cutoff_frequency_ratio=0.28
-    ),
-}
+# Кількість потоків за замовчуванням
+DEFAULT_WORKERS = 4
+
+# (ключ моделі, тяжкість s) — назви пресетів містять клінічне значення
+PRESETS = (
+    ("acuity", 0.3),
+    ("acuity", 0.7),
+    ("cataract", 0.3),
+    ("cataract", 0.7),
+    ("contrast", 0.5),
+    ("scotoma", 0.5),
+    ("tunnel", 0.714),
+    ("protanomaly", 0.6),
+    ("metamorphopsia", 0.25),
+    ("metamorphopsia", 0.75),
+)
+
+
+def _through_normal_observer(func, viewing):
+    def run(image):
+        return apply_observer(func(image), NORMAL_OBSERVER, viewing)
+
+    return run
+
+
+def build_simulations(viewing):
+    """Пресети звичайного прогону: назва -> функція(image) для заданих умов перегляду."""
+    simulations = {}
+    for key, s in PRESETS:
+        model = MODELS[key]
+        simulations[preset_name(model, s)] = functools.partial(
+            model.simulate, s=s, viewing=viewing
+        )
+
+    fixed = {
+        "Ахроматопсія (Скотопічна)": sim.simulate_achromatopsia_scotopic,
+        "Протанопія (Brettel)": functools.partial(
+            sim.simulate_dichromacy_brettel, sim_type="protanopia"
+        ),
+        "Дейтеранопія (Brettel)": functools.partial(
+            sim.simulate_dichromacy_brettel, sim_type="deuteranopia"
+        ),
+        "Тританопія (Brettel)": functools.partial(
+            sim.simulate_dichromacy_brettel, sim_type="tritanopia"
+        ),
+        "Флоатери (Діабет. рет.)": functools.partial(
+            sim.simulate_floaters, num_floaters=30, max_size=50, seed=RANDOM_SEED
+        ),
+    }
+    for name, func in fixed.items():
+        simulations[name] = _through_normal_observer(func, viewing)
+    return simulations
