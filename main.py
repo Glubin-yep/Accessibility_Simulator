@@ -148,7 +148,8 @@ def prepare_baseline(url, output_dir, args, viewing):
 def analyze_url(url, output_dir, args):
     """
     Повний цикл аналізу однієї сторінки.
-    Повертає список (назва симуляції, ILR) або None у разі помилки.
+    Повертає список (назва симуляції, ILR) або None, якщо не вдалося підготувати еталон.
+    Для симуляції, що завершилась помилкою, ILR = None (решта симуляцій виконується).
     """
     viewing = viewing_from_args(args)
     prepared = prepare_baseline(url, output_dir, args, viewing)
@@ -187,7 +188,11 @@ def analyze_url(url, output_dir, args):
     print(" ГЕНЕРАЦІЯ ЗОБРАЖЕННЯ-ЗВІТУ")
     print("=" * 40)
     report_path = os.path.join(output_dir, config.REPORT_FILENAME)
-    generate_readability_report_table(results, baseline_word_set, filename=report_path)
+    try:
+        generate_readability_report_table(results, baseline_word_set, filename=report_path)
+    except OSError as e:
+        print(f"ПОМИЛКА: не вдалося зберегти таблицю-звіт {report_path}: {e}")
+        report_path = "НЕ ЗБЕРЕЖЕНО"
 
     print("\n" + "=" * 40)
     print(" ЗВІТ ПРО АНАЛІЗ ДОСТУПНОСТІ (КОНСОЛЬ)")
@@ -207,6 +212,11 @@ def analyze_url(url, output_dir, args):
 
     ilr_by_simulation = []
     for result in sorted(results, key=lambda r: r.name):
+        if result.failed:
+            ilr_by_simulation.append((result.name, None))
+            print(f"\nСимуляція: {result.name}")
+            print(f"  ПОМИЛКА: {result.error}")
+            continue
         m = compute_metrics(baseline_word_set, result.word_set)
         ilr_by_simulation.append((result.name, m.information_loss_ratio))
         print(f"\nСимуляція: {result.name}")
@@ -450,6 +460,7 @@ def main(argv=None):
     urls = args.url or [config.URL_TO_ANALYZE]
     exit_code = EXIT_OK
     violations = []
+    failed_simulations = []
 
     for url in urls:
         output_dir = (
@@ -465,12 +476,21 @@ def main(argv=None):
         if ilr_by_simulation is None:
             exit_code = EXIT_ERROR
             continue
+        failed_simulations += [(url, name) for name, ilr in ilr_by_simulation if ilr is None]
         if args.max_ilr is not None:
             violations += [
                 (url, name, ilr)
                 for name, ilr in ilr_by_simulation
-                if ilr * 100 > args.max_ilr
+                if ilr is not None and ilr * 100 > args.max_ilr
             ]
+
+    if failed_simulations:
+        exit_code = EXIT_ERROR
+        print("\n" + "=" * 40)
+        print(f" СИМУЛЯЦІЇ З ПОМИЛКАМИ: {len(failed_simulations)}")
+        print("=" * 40)
+        for url, name in failed_simulations:
+            print(f"  НЕ ВИКОНАНО: {name} ({url})")
 
     if args.max_ilr is not None:
         print("\n" + "=" * 40)
@@ -482,7 +502,11 @@ def main(argv=None):
             if exit_code == EXIT_OK:
                 exit_code = EXIT_QUALITY_GATE_FAILED
         else:
-            print("  Усі симуляції в межах порогу.")
+            print(
+                "  Усі виконані симуляції в межах порогу."
+                if failed_simulations
+                else "  Усі симуляції в межах порогу."
+            )
 
     return exit_code
 
