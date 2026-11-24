@@ -16,6 +16,7 @@ import pytesseract
 
 import config
 from analysis import TESSERACT_LANG, compute_metrics, get_word_data
+from combination import STAGE_ORDER, parse_combination
 from observer import NORMAL_OBSERVER, apply_observer
 from reporting import generate_readability_report_table, process_simulation, save_image
 from severity import MODELS
@@ -158,7 +159,11 @@ def analyze_url(url, output_dir, args):
     baseline_word_set = set(baseline_word_data.keys())
     baseline_word_count = len(baseline_word_set)
     max_workers = args.workers or config.DEFAULT_WORKERS
-    simulations = config.build_simulations(viewing)
+    simulations = config.build_simulations(
+        viewing,
+        combinations=[*config.COMBINATIONS, *(args.combo or [])],
+        presets=not args.combo_only,
+    )
 
     wall_start = time.perf_counter()
     results = []
@@ -304,6 +309,13 @@ def parse_viewport(value):
     return width, height
 
 
+def combination_arg(value):
+    try:
+        return parse_combination(value)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
 def build_parser():
     parser = argparse.ArgumentParser(
         description="Запуск симулятора доступності вад зору."
@@ -370,6 +382,21 @@ def build_parser():
         "це значення (у відсотках), програма завершується з кодом 1.",
     )
     parser.add_argument(
+        "--combo",
+        type=combination_arg,
+        action="append",
+        metavar="МОДЕЛЬ=S[,МОДЕЛЬ=S...]",
+        help="Комбінована симуляція кількох порушень одночасно, напр. "
+        "cataract=0.3,protanomaly=1,acuity=0.3 (можна вказати кілька разів). "
+        "Моделі: " + ", ".join(STAGE_ORDER) + "; S -- ступінь порушення від 0 до 1. "
+        "Порядок застосування фіксований (оптика -> сітківка -> CSF), а не порядок у рядку.",
+    )
+    parser.add_argument(
+        "--combo-only",
+        action="store_true",
+        help="Запускати лише комбінації з --combo / config.COMBINATIONS, без стандартних пресетів.",
+    )
+    parser.add_argument(
         "--sweep",
         action="store_true",
         help="Режим прогону моделей вад зору по шкалі тяжкості замість звичайного аналізу.",
@@ -410,6 +437,10 @@ def main(argv=None):
         parser.error("потрібно 0 < --onset-ilr < --breaking-ilr <= 100")
     if args.sweep and args.max_ilr is not None:
         print("Попередження: --max-ilr ігнорується в режимі --sweep.")
+    if args.combo_only and not (args.combo or config.COMBINATIONS):
+        parser.error("--combo-only потребує хоча б одного --combo або config.COMBINATIONS")
+    if args.sweep and args.combo:
+        print("Попередження: --combo ігнорується в режимі --sweep.")
     if args.save_sweep_images and not args.sweep:
         print("Попередження: --save-sweep-images ігнорується без --sweep.")
 
