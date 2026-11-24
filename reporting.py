@@ -12,6 +12,7 @@ from analysis import compute_metrics, get_word_data
 COLOR_COMMON = (0, 200, 0)  # зелений  — слово збереглося
 COLOR_LOST = (0, 165, 255)  # помаранчевий — слово втрачено (позиція з оригіналу)
 COLOR_ARTIFACT = (0, 0, 255)  # червоний — хибно розпізнане слово (артефакт)
+TABLE_ERROR_COLOR = (200, 0, 0)  # RGB, рядок таблиці для симуляції з помилкою
 
 _FONT_CANDIDATES = [
     "C:/Windows/Fonts/arial.ttf",
@@ -30,6 +31,11 @@ class SimulationResult:
     filename: str
     simulation_time: float  # лише сама симуляція
     ocr_time: float  # розпізнавання тексту на симульованому зображенні
+    error: str | None = None  # опис винятку, якщо симуляція або OCR не вдалися
+
+    @property
+    def failed(self):
+        return self.error is not None
 
     @property
     def total_time(self):
@@ -86,7 +92,14 @@ def generate_readability_report_table(
         ("Симуляція", "Всього", "Збіг %", "ILR %", "Артефакти", "Час, с"),
         ("Оригінал (База)", f"{baseline_count}", "100.0%", "0.0%", "0", "—"),
     ]
+    errors = set()
     for result in sorted(results, key=lambda r: r.name):
+        if result.failed:
+            errors.add(len(table_data))
+            table_data.append(
+                (result.name, "ПОМИЛКА", "—", "—", "—", f"{result.total_time:.2f}")
+            )
+            continue
         m = compute_metrics(baseline_word_set, result.word_set)
         table_data.append(
             (
@@ -115,7 +128,7 @@ def generate_readability_report_table(
             draw.text(
                 (x_offset, top + row_height // 2),
                 str(cell),
-                fill="black",
+                fill=TABLE_ERROR_COLOR if row_index in errors else "black",
                 font=font,
                 anchor="lm",
             )
@@ -137,16 +150,33 @@ def process_simulation(
     Застосовує симуляцію, розпізнає текст і зберігає зображення з рамками:
     зелені — збіг з оригіналом, помаранчеві — втрачені слова (позиції з оригіналу),
     червоні — артефакти розпізнавання.
+
+    Виняток у симуляції або OCR не зупиняє прогін: повертається результат
+    з error і порожнім набором слів, решта симуляцій продовжується.
     """
     print(f"[В роботі]: Симуляція '{simulation_name}'...")
 
+    simulation_time = ocr_time = 0.0
+    stage = "симуляція"
     start = time.perf_counter()
-    simulated_image = simulation_func(original_image)
-    simulation_time = time.perf_counter() - start
-
-    start = time.perf_counter()
-    sim_word_data = get_word_data(simulated_image)
-    ocr_time = time.perf_counter() - start
+    try:
+        simulated_image = simulation_func(original_image)
+        simulation_time = time.perf_counter() - start
+        stage = "OCR"
+        start = time.perf_counter()
+        sim_word_data = get_word_data(simulated_image)
+        ocr_time = time.perf_counter() - start
+    except Exception as e:
+        elapsed = time.perf_counter() - start
+        if stage == "OCR":
+            ocr_time = elapsed
+        else:
+            simulation_time = elapsed
+        error = f"{stage}: {type(e).__name__}: {e}"
+        print(f"ПОМИЛКА: Симуляція '{simulation_name}' не виконана ({error}).")
+        return SimulationResult(
+            simulation_name, set(), None, simulation_time, ocr_time, error
+        )
 
     sim_word_set = set(sim_word_data.keys())
     baseline_word_set = set(baseline_word_data.keys())
