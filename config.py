@@ -1,6 +1,7 @@
 import functools
 
 import simulations as sim
+from combination import combination_name, simulate_combination, validate_components
 from observer import NORMAL_OBSERVER, apply_observer
 from severity import MODELS, preset_name
 
@@ -38,6 +39,12 @@ PRESETS = (
 )
 
 
+# Комбіновані симуляції, що додаються до кожного звичайного прогону:
+# кортежі ((ключ моделі, ступінь s), ...). Те саме з командного рядка: --combo.
+# Приклад: ((("cataract", 0.3), ("protanomaly", 1.0), ("acuity", 0.3)),)
+COMBINATIONS = ()
+
+
 def _through_normal_observer(func, viewing):
     def run(image):
         return apply_observer(func(image), NORMAL_OBSERVER, viewing)
@@ -45,8 +52,24 @@ def _through_normal_observer(func, viewing):
     return run
 
 
-def build_simulations(viewing):
-    """Пресети звичайного прогону: назва -> функція(image) для заданих умов перегляду."""
+def build_combinations(viewing, combinations):
+    """Комбіновані симуляції: назва -> функція(image)."""
+    simulations = {}
+    for components in combinations:
+        components = validate_components(components)
+        simulations[combination_name(components)] = functools.partial(
+            simulate_combination, components=components, viewing=viewing
+        )
+    return simulations
+
+
+def build_simulations(viewing, combinations=(), presets=True):
+    """
+    Симуляції звичайного прогону: назва -> функція(image) для заданих умов перегляду.
+    combinations додаються до пресетів (або замінюють їх, якщо presets=False).
+    """
+    if not presets:
+        return build_combinations(viewing, combinations)
     simulations = {}
     for key, s in PRESETS:
         model = MODELS[key]
@@ -71,4 +94,5 @@ def build_simulations(viewing):
     }
     for name, func in fixed.items():
         simulations[name] = _through_normal_observer(func, viewing)
+    simulations.update(build_combinations(viewing, combinations))
     return simulations
